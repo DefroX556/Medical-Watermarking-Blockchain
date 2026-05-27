@@ -139,10 +139,15 @@ def embed_watermark(
             )
             log.info("AI analysis: status=%s, model=%s",
                      ai_info.get("status"), ai_info.get("model"))
+        except ValueError as e:
+            # Missing API key or config issue
+            log.warning("AI config error: %s — falling back to local texture analysis.", e)
+            positions = intelligent_position_selection(gray, positions)
+            ai_info = {"status": "fallback_no_apikey", "model": "local_texture"}
         except Exception:
             log.warning("AI cloud analysis failed — falling back to local texture analysis.")
             positions = intelligent_position_selection(gray, positions)
-            ai_info = {"status": "fallback_local", "model": "none"}
+            ai_info = {"status": "fallback_local", "model": "local_texture"}
 
     bits = text_to_bits(watermark_text)
 

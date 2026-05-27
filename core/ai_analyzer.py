@@ -185,22 +185,30 @@ def _parse_ai_regions(response_text: str, bh: int, bw: int) -> List[Tuple[int, i
     """
     import re
 
-    # Try to extract JSON from response
-    json_match = re.search(r'\[.*?\]', response_text, re.DOTALL)
-    if json_match:
+    # Try to extract JSON from response — handle multiple formats
+    # Find ALL JSON arrays in the text (greedy to get the longest one)
+    json_matches = re.findall(r'\[[\s\S]*?\]', response_text)
+    for jm in json_matches:
         try:
-            blocks = json.loads(json_match.group())
+            blocks = json.loads(jm)
+            if not isinstance(blocks, list) or len(blocks) == 0:
+                continue
             result = []
             for b in blocks:
-                r = int(b.get("row", 0))
-                c = int(b.get("col", 0))
+                if isinstance(b, dict):
+                    r = int(b.get("row", b.get("r", -1)))
+                    c = int(b.get("col", b.get("c", -1)))
+                elif isinstance(b, (list, tuple)) and len(b) >= 2:
+                    r, c = int(b[0]), int(b[1])
+                else:
+                    continue
                 if 0 <= r < bh and 0 <= c < bw:
                     result.append((r, c))
             if result:
                 log.info("AI recommended %d blocks for embedding.", len(result))
                 return result
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError):
+            continue
 
     # Fallback: extract any (row, col) pairs from text
     pairs = re.findall(r'row["\s:]+(\d+)[,\s]+col["\s:]+(\d+)', response_text, re.IGNORECASE)
@@ -247,14 +255,21 @@ def ai_analyze_image(
     sorted_regions = sorted(regions, key=lambda r: r["std"], reverse=True)
     top_blocks = sorted_regions[:20]
 
+    # Prompt designed for GLM-5.1 reasoning model:
+    # The model reasons in the 'reasoning' field, so we ask it to
+    # produce a clear JSON array that our parser can extract.
     prompt = (
-        f"Medical image '{image_name}' has {bw}x{bh} blocks. "
-        f"These 20 blocks have highest texture (std). "
-        f"Which blocks are best for hiding a watermark? "
-        f"Pick blocks with high std in non-diagnostic areas.\n\n"
-        f"Blocks: {json.dumps(top_blocks)}\n\n"
-        f"Reply with JSON array only: "
-        f'[{{"row":R,"col":C,"score":S}}, ...]'
+        f"Task: Select best blocks for watermark embedding in a medical image.\n"
+        f"Image grid: {bw} columns x {bh} rows.\n"
+        f"Below are 20 high-texture blocks with their statistics:\n\n"
+        f"{json.dumps(top_blocks, indent=1)}\n\n"
+        f"Selection criteria:\n"
+        f"1. High std (good perceptual masking)\n"
+        f"2. Edge/corner blocks preferred (non-diagnostic)\n"
+        f"3. Avoid center blocks (likely diagnostic content)\n\n"
+        f"Return a JSON array of selected blocks sorted by suitability:\n"
+        f'[{{"row":0,"col":0,"score":0.9}}, ...]\n'
+        f"Include at least 10 blocks. Output ONLY the JSON array, nothing else."
     )
 
     messages = [
@@ -278,10 +293,13 @@ def ai_analyze_image(
 
     ai_blocks = _parse_ai_regions(response_text, bh, bw)
 
-    # Build block score map
+    # Build block score map — all AI-recommended blocks get high score
+    # Use equal weighting (1.0) for all recommended blocks to avoid
+    # over-concentrating watermark in a single block
     block_scores = np.zeros((bh, bw), dtype=np.float64)
     for i, (r, c) in enumerate(ai_blocks):
-        block_scores[r, c] = 1.0 - (i / max(len(ai_blocks), 1))
+        # Score decays gently: first block = 1.0, last = 0.5
+        block_scores[r, c] = 1.0 - 0.5 * (i / max(len(ai_blocks) - 1, 1))
 
     return {
         "ai_regions": ai_blocks,

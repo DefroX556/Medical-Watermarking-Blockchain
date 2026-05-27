@@ -142,13 +142,19 @@ def _validate_with_silhouette(
     unique = set(labels) - {-1}
     if len(unique) < 2 or len(coords) < 3:
         return -1.0
-    # Subsample for speed if too many points
-    if len(coords) > 5000:
-        idx = np.random.choice(len(coords), 5000, replace=False)
-        coords = coords[idx]
-        labels = labels[idx]
+    # Only score non-noise points
+    mask = labels >= 0
+    valid_coords = coords[mask]
+    valid_labels = labels[mask]
+    if len(set(valid_labels)) < 2 or len(valid_coords) < 3:
+        return -1.0
+    # Subsample for speed if too many points — keep coords+labels paired
+    if len(valid_coords) > 5000:
+        idx = np.random.choice(len(valid_coords), 5000, replace=False)
+        valid_coords = valid_coords[idx]
+        valid_labels = valid_labels[idx]
     try:
-        return float(silhouette_score(coords, labels))
+        return float(silhouette_score(valid_coords, valid_labels))
     except Exception:
         return -1.0
 
@@ -221,13 +227,14 @@ def adaptive_select_pixels(
     sil_score = _validate_with_silhouette(coords, labels)
     log.info("Silhouette score: %.4f", sil_score)
 
-    # Step 7: Extract cluster centroids
+    # Step 7: Extract ALL pixels from valid clusters (not just centroids)
     unique_labels = set(labels) - {-1}
     selected: List[Tuple[int, int]] = []
     for lab in sorted(unique_labels):
         cluster_coords = coords[labels == lab]
-        centroid = np.mean(cluster_coords, axis=0).round().astype(int)
-        selected.append((int(centroid[0]), int(centroid[1])))
+        # Include all cluster member pixels — they are structurally stable
+        for pt in cluster_coords:
+            selected.append((int(pt[0]), int(pt[1])))
 
     # Fallback if too few clusters
     if len(selected) < DBSCAN_MIN_CLUSTER_POSITIONS:

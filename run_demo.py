@@ -20,6 +20,7 @@ import time
 import argparse
 import logging
 import pprint
+from typing import Optional
 
 from config import (
     DATASET_DIR,
@@ -59,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def resolve_image(explicit: str | None) -> str:
+def resolve_image(explicit: Optional[str]) -> str:
     """Return a valid image path — either the user-supplied one or auto-detected."""
     if explicit:
         if not os.path.isfile(explicit):
